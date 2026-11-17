@@ -1,0 +1,11 @@
+export struct Message { from: string, text: string, mine: bool }
+export struct Participant { name: string, initial: string, color: color, cam: bool }
+export struct Group {
+    id: string,
+    name: string,
+    initial: string,
+    icon: image,
+    color: color,
+    messages: [Message],
+    participants: [Participant],
+}

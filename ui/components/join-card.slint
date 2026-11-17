@@ -1,0 +1,64 @@
+import { LineEdit } from "std-widgets.slint";
+
+// Tarjeta del popup para unirse a un grupo
+export component JoinCard inherits Rectangle {
+    in property <string> error;
+    callback submit(string);
+    callback cancel;
+
+    width: 360px;
+    height: card.preferred-height;
+    border-radius: 12px;
+    background: #313338;
+    drop-shadow-blur: 24px;
+    drop-shadow-color: #00000080;
+    TouchArea { } // evita que el click en la tarjeta cierre el popup
+
+    card := VerticalLayout {
+        padding: 20px;
+        spacing: 12px;
+        Text {
+            text: "Unirse a un grupo";
+            color: white;
+            font-size: 18px;
+            font-weight: 700;
+        }
+        Text {
+            text: "Ingresá el código de grupo";
+            color: #b5bac1;
+            font-size: 13px;
+        }
+        code-input := LineEdit {
+            placeholder-text: "Código de grupo";
+            init => { self.focus(); }
+            accepted => { root.submit(code-input.text); }
+        }
+        if error != "": Text {
+            text: error;
+            color: #ed4245;
+            font-size: 12px;
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            Rectangle {
+                width: 96px;
+                height: 36px;
+                border-radius: 6px;
+                background: cancel-ta.has-hover ? #4e5058 : transparent;
+                animate background { duration: 150ms; }
+                Text { text: "Cancelar"; color: white; }
+                cancel-ta := TouchArea { clicked => { root.cancel(); } }
+            }
+            Rectangle {
+                width: 96px;
+                height: 36px;
+                border-radius: 6px;
+                background: join-ta.has-hover ? #4752c4 : #5865f2;
+                animate background { duration: 150ms; }
+                Text { text: "Unirse"; color: white; font-weight: 600; }
+                join-ta := TouchArea { clicked => { root.submit(code-input.text); } }
+            }
+        }
+    }
+}

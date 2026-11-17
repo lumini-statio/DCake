@@ -1,0 +1,82 @@
+import { LineEdit } from "std-widgets.slint";
+
+// Pantalla de ingreso / registro: ocupa toda la ventana hasta que el usuario entra.
+export component AuthView inherits Rectangle {
+    in property <string> error;
+    in-out property <bool> registering;
+    property <string> name-text;
+    property <string> email-text;
+    callback login(string, string);
+    callback register(string, string, string, string);
+
+    background: #1e1f22;
+    TouchArea { } // bloquea los clicks a la app de abajo
+
+    function submit() {
+        if registering {
+            root.register(root.name-text, nick-input.text, root.email-text, pass-input.text);
+        } else {
+            root.login(nick-input.text, pass-input.text);
+        }
+    }
+
+    Rectangle {
+        width: 360px;
+        height: card.preferred-height;
+        border-radius: 12px;
+        background: #313338;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000080;
+
+        card := VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+            Text {
+                text: registering ? "Crear cuenta" : "Iniciar sesión";
+                color: white;
+                font-size: 18px;
+                font-weight: 700;
+            }
+            // `if` en vez de `visible`: un elemento invisible sigue ocupando lugar en el layout
+            if registering: LineEdit {
+                placeholder-text: "Nombre (opcional)";
+                text <=> root.name-text;
+            }
+            nick-input := LineEdit {
+                placeholder-text: "Nickname";
+                init => { self.focus(); }
+                accepted => { pass-input.focus(); }
+            }
+            if registering: LineEdit {
+                placeholder-text: "Email (opcional)";
+                text <=> root.email-text;
+            }
+            pass-input := LineEdit {
+                placeholder-text: "Contraseña";
+                input-type: password;
+                accepted => { root.submit(); }
+            }
+            if error != "": Text {
+                text: error;
+                color: #ed4245;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                height: 36px;
+                border-radius: 6px;
+                background: ok-ta.has-hover ? #4752c4 : #5865f2;
+                animate background { duration: 150ms; }
+                Text { text: registering ? "Registrarse" : "Ingresar"; color: white; font-weight: 600; }
+                ok-ta := TouchArea { clicked => { root.submit(); } }
+            }
+            Text {
+                text: registering ? "¿Ya tenés cuenta? Iniciá sesión" : "¿No tenés cuenta? Registrate";
+                color: switch-ta.has-hover ? #c9cdfb : #949cf7;
+                font-size: 13px;
+                horizontal-alignment: center;
+                switch-ta := TouchArea { clicked => { root.registering = !root.registering; } }
+            }
+        }
+    }
+}

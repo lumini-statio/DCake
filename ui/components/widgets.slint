@@ -1,0 +1,56 @@
+export component Avatar inherits Rectangle {
+    in property <string> initial;
+    in property <image> icon;
+    in property <length> size: 48px;
+    width: size;
+    height: size;
+    border-radius: size / 2;
+    clip: true;
+    if icon.width > 0: Image {
+        width: 100%;
+        height: 100%;
+        source: icon;
+        image-fit: cover;
+    }
+    if icon.width <= 0: Text {
+        text: initial;
+        color: white;
+        font-size: size * 0.42;
+        font-weight: 700;
+    }
+}
+
+export component IconButton inherits Rectangle {
+    in property <string> commands;
+    in property <bool> filled: true;
+    in property <bool> off;
+    in property <color> bg: #3a3c42;
+    in property <length> size: 52px;
+    callback clicked;
+    width: size;
+    height: size;
+    border-radius: size / 2;
+    background: ta.pressed ? bg.darker(0.3) : ta.has-hover ? bg.brighter(0.2) : bg;
+    Path {
+        width: size * 0.48;
+        height: size * 0.48;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: commands;
+        fill: filled ? white : transparent;
+        stroke: white;
+        stroke-width: 2px;
+    }
+    if off: Path {
+        width: size * 0.6;
+        height: size * 0.6;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: "M3 3L21 21";
+        stroke: white;
+        stroke-width: 3px;
+    }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}

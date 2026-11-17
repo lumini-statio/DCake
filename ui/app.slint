@@ -1,0 +1,136 @@
+import { Palette } from "std-widgets.slint";
+import { Group } from "components/types.slint";
+import { Sidebar } from "components/sidebar.slint";
+import { ChatView } from "components/chat-view.slint";
+import { CallView } from "components/call-view.slint";
+import { JoinCard } from "components/join-card.slint";
+import { AuthView } from "components/auth-view.slint";
+
+// Re-exportados para que Rust genere los structs.
+export { Message, Participant, Group } from "components/types.slint";
+
+export component AppWindow inherits Window {
+    title: "Chat";
+    preferred-width: 1000px;
+    preferred-height: 650px;
+    background: #1e1f22;
+    forward-focus: fs;
+
+    in property <[Group]> groups;
+    in-out property <int> selected: -1;
+    in-out property <bool> in-call;
+    in-out property <bool> cam-on: true;
+    in-out property <bool> mic-on: true;
+    callback send(int, string);
+    // Devuelve "" si se unió, o el mensaje de error.
+    callback join-group(string) -> string;
+    // Devuelven "" si entró, o el mensaje de error.
+    callback login(string, string) -> string;
+    callback register(string, string, string, string) -> string;
+    in-out property <bool> logged-in;
+
+    property <Group> current: groups[selected];
+    property <string> join-error;
+    property <string> auth-error;
+
+    init => { Palette.color-scheme = ColorScheme.dark; }
+
+    function submit-join(code: string) {
+        join-error = root.join-group(code);
+        if join-error == "" {
+            join-popup.close();
+            selected = groups.length - 1;
+            chat.reset();
+        }
+    }
+
+    fs := FocusScope {
+        capture-key-pressed(e) => {
+            if e.text == Key.Escape && selected >= 0 {
+                selected = -1;
+                in-call = false;
+                fs.focus();
+                return accept;
+            }
+            reject
+        }
+
+        HorizontalLayout {
+            Sidebar {
+                groups: groups;
+                selected: selected;
+                add-clicked => {
+                    join-error = "";
+                    join-popup.show();
+                }
+                group-clicked(i) => {
+                    selected = i;
+                    in-call = false;
+                    chat.reset();
+                }
+            }
+
+            // Espacio de chat
+            Rectangle {
+                background: #2b2d31;
+
+                if selected < 0: Text {
+                    text: "Seleccioná un chat";
+                    color: #80848e;
+                    font-size: 16px;
+                }
+
+                chat := ChatView {
+                    visible: selected >= 0 && !in-call;
+                    current: current;
+                    send(text) => { root.send(selected, text); }
+                    start-call => { in-call = true; }
+                }
+
+                // Videollamada: ocupa todo el espacio de chat
+                if selected >= 0 && in-call: CallView {
+                    participants: current.participants;
+                    cam-on <=> root.cam-on;
+                    mic-on <=> root.mic-on;
+                    hang-up => {
+                        in-call = false;
+                        chat.reset();
+                    }
+                }
+            }
+        }
+
+        // Popup modal para unirse a un grupo
+        join-popup := PopupWindow {
+            x: 0;
+            y: 0;
+            width: root.width;
+            height: root.height;
+            close-policy: PopupClosePolicy.no-auto-close;
+
+            // Fondo oscuro: click afuera cierra
+            Rectangle {
+                background: #000000a0;
+                TouchArea { clicked => { join-popup.close(); } }
+            }
+
+            JoinCard {
+                error: join-error;
+                submit(code) => { root.submit-join(code); }
+                cancel => { join-popup.close(); }
+            }
+        }
+    }
+
+    if !logged-in: AuthView {
+        error: auth-error;
+        login(nick, pass) => {
+            auth-error = root.login(nick, pass);
+            logged-in = auth-error == "";
+        }
+        register(name, nick, email, pass) => {
+            auth-error = root.register(name, nick, email, pass);
+            logged-in = auth-error == "";
+        }
+    }
+}

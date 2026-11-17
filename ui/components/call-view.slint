@@ -1,0 +1,86 @@
+import { Participant } from "types.slint";
+import { Icons } from "icons.slint";
+import { Avatar, IconButton } from "widgets.slint";
+
+// Videollamada: grilla de participantes y botones flotantes
+export component CallView inherits Rectangle {
+    in property <[Participant]> participants;
+    in-out property <bool> cam-on;
+    in-out property <bool> mic-on;
+    callback hang-up;
+
+    background: #111214;
+    property <int> n: participants.length;
+    property <int> cols: Math.ceil(Math.sqrt(n));
+    property <int> rows: Math.ceil(n / cols);
+    property <int> last-row-count: n - (rows - 1) * cols;
+    property <length> gap: 12px;
+    property <length> pad: 16px;
+    property <length> area-h: self.height - 90px; // espacio para los botones flotantes
+    property <length> tw: (self.width - 2 * pad - (cols - 1) * gap) / cols;
+    property <length> th: (area-h - 2 * pad - (rows - 1) * gap) / rows;
+
+    for p[i] in participants: Rectangle {
+        property <int> tile-row: Math.floor(i / root.cols);
+        // como flex con justify-content: center en la última fila
+        property <length> row-offset: tile-row == root.rows - 1 ? (root.cols - root.last-row-count) * (root.tw + root.gap) / 2 : 0;
+        property <bool> cam: i == 0 ? cam-on : p.cam;
+        x: root.pad + row-offset + Math.mod(i, root.cols) * (root.tw + root.gap);
+        y: root.pad + tile-row * (root.th + root.gap);
+        width: root.tw;
+        height: root.th;
+        border-radius: 12px;
+        clip: true;
+        background: #232428;
+
+        // shortcut: sin captura real de cámara, se muestra un placeholder; usar nokhwa + SharedPixelBuffer para video real.
+        if cam: Rectangle {
+            background: @linear-gradient(135deg, p.color 0%, #000000 100%);
+        }
+        if !cam: Avatar {
+            size: min(root.tw, root.th) * 0.35;
+            initial: p.initial;
+            background: p.color;
+        }
+        Rectangle {
+            x: 8px;
+            y: parent.height - self.height - 8px;
+            height: 24px;
+            width: name-tag.preferred-width + 16px;
+            border-radius: 6px;
+            background: #000000a0;
+            name-tag := Text {
+                text: p.name + (i == 0 && !mic-on ? " · mic apagado" : "");
+                color: white;
+                font-size: 12px;
+            }
+        }
+    }
+
+    // Botones flotantes
+    HorizontalLayout {
+        y: parent.height - 76px;
+        height: 60px;
+        alignment: center;
+        spacing: 16px;
+        IconButton {
+            commands: Icons.mic;
+            filled: false;
+            off: !mic-on;
+            bg: mic-on ? #3a3c42 : #ed4245;
+            clicked => { mic-on = !mic-on; }
+        }
+        IconButton {
+            commands: Icons.video;
+            off: !cam-on;
+            bg: cam-on ? #3a3c42 : #ed4245;
+            clicked => { cam-on = !cam-on; }
+        }
+        IconButton {
+            commands: Icons.hangup;
+            filled: false;
+            bg: #ed4245;
+            clicked => { root.hang-up(); }
+        }
+    }
+}

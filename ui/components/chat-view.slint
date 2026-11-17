@@ -1,0 +1,122 @@
+import { LineEdit, ListView } from "std-widgets.slint";
+import { Group } from "types.slint";
+import { Icons } from "icons.slint";
+import { Avatar, IconButton } from "widgets.slint";
+
+// Header, mensajes e input del grupo actual
+export component ChatView inherits Rectangle {
+    in property <Group> current;
+    callback send(string);
+    callback start-call;
+
+    // El chat sigue al último mensaje mientras el usuario esté abajo de todo.
+    property <bool> follow: true;
+
+    // Vuelve al último mensaje y enfoca el input.
+    public function reset() {
+        follow = true;
+        input.focus();
+    }
+
+    function do-send() {
+        follow = true;
+        root.send(input.text);
+        input.text = "";
+    }
+
+    VerticalLayout {
+        // Header
+        Rectangle {
+            height: 56px;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    Avatar {
+                        size: 36px;
+                        initial: current.initial;
+                        icon: current.icon;
+                        background: current.color;
+                    }
+                }
+                Text {
+                    text: current.name;
+                    color: white;
+                    font-size: 16px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        size: 40px;
+                        bg: transparent;
+                        commands: Icons.video;
+                        clicked => { root.start-call(); }
+                    }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: #1f2023; }
+
+        // Mensajes
+        list := ListView {
+            vertical-stretch: 1;
+            changed content-y => {
+                follow = self.content-y <= self.visible-height - self.content-height + 20px;
+            }
+            changed content-height => {
+                if follow {
+                    self.content-y = min(0px, self.visible-height - self.content-height);
+                }
+            }
+            for m in current.messages: HorizontalLayout {
+                padding-top: 4px;
+                padding-bottom: 4px;
+                padding-left: 16px;
+                padding-right: 16px;
+                alignment: m.mine ? LayoutAlignment.end : LayoutAlignment.start;
+                Rectangle {
+                    max-width: list.width * 0.7;
+                    border-radius: 12px;
+                    background: m.mine ? #5865f2 : #383a40;
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 2px;
+                        if !m.mine: Text {
+                            text: m.from;
+                            color: #b5bac1;
+                            font-size: 12px;
+                            font-weight: 600;
+                        }
+                        Text {
+                            text: m.text;
+                            color: white;
+                            font-size: 14px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Input
+        HorizontalLayout {
+            padding: 12px;
+            spacing: 8px;
+            input := LineEdit {
+                placeholder-text: "Escribí un mensaje...";
+                accepted => { do-send(); }
+            }
+            IconButton {
+                size: 40px;
+                bg: #5865f2;
+                commands: Icons.send;
+                clicked => { do-send(); }
+            }
+        }
+    }
+}

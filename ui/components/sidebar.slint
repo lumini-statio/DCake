@@ -1,0 +1,68 @@
+import { Group } from "types.slint";
+import { Avatar } from "widgets.slint";
+
+// Sidebar de grupos
+export component Sidebar inherits Rectangle {
+    in property <[Group]> groups;
+    in property <int> selected;
+    callback add-clicked;
+    callback group-clicked(int);
+
+    width: 76px;
+    background: #17181a;
+    VerticalLayout {
+        padding: 14px;
+        spacing: 12px;
+        alignment: start;
+        // Botón para unirse a un grupo
+        Rectangle {
+            height: 48px;
+            Rectangle {
+                width: 48px;
+                height: 48px;
+                border-radius: add-ta.has-hover ? 16px : 24px;
+                background: add-ta.pressed ? #2d7d46 : add-ta.has-hover ? #3ba55d : #2b2d31;
+                animate border-radius, background { duration: 220ms; easing: ease-out; }
+                // Path en vez de Text "+": el glifo de la fuente no queda centrado verticalmente
+                Path {
+                    width: 20px;
+                    height: 20px;
+                    viewbox-width: 24;
+                    viewbox-height: 24;
+                    commands: "M12 3V21 M3 12H21";
+                    stroke: add-ta.has-hover ? white : #3ba55d;
+                    stroke-width: 2.5px;
+                    animate stroke { duration: 220ms; }
+                }
+            }
+            add-ta := TouchArea {
+                clicked => { root.add-clicked(); }
+            }
+        }
+        Rectangle { height: 2px; background: #2b2d31; }
+
+        for g[i] in groups: Rectangle {
+            height: 48px;
+            Rectangle {
+                x: -14px;
+                y: (parent.height - self.height) / 2;
+                width: 4px;
+                height: selected == i ? 40px : ta.has-hover ? 20px : 0;
+                border-radius: 2px;
+                background: white;
+                animate height { duration: 220ms; easing: ease-out; }
+            }
+            Avatar {
+                initial: g.initial;
+                icon: g.icon;
+                background: ta.pressed ? g.color.darker(0.2) : ta.has-hover ? g.color.brighter(0.15) : g.color;
+                border-radius: selected == i || ta.has-hover ? 16px : 24px;
+                animate border-radius { duration: 220ms; easing: ease-out; }
+                animate background { duration: 150ms; }
+            }
+            ta := TouchArea {
+                clicked => { root.group-clicked(i); }
+            }
+        }
+    }
+}

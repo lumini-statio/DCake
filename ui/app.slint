@@ -5,9 +5,11 @@ import { ChatView } from "components/chat-view.slint";
 import { CallView } from "components/call-view.slint";
 import { JoinCard } from "components/join-card.slint";
 import { AuthView } from "components/auth-view.slint";
+import { AccountsView } from "components/accounts-view.slint";
+import { Account } from "components/types.slint";
 
 // Re-exportados para que Rust genere los structs.
-export { Message, Participant, Group } from "components/types.slint";
+export { Message, User, Group, Account } from "components/types.slint";
 
 export component AppWindow inherits Window {
     title: "Chat";
@@ -28,10 +30,15 @@ export component AppWindow inherits Window {
     callback login(string, string) -> string;
     callback register(string, string, string, string) -> string;
     in-out property <bool> logged-in;
+    // Cuentas de data.json; mientras choosing-account sea true se muestra el panel de cuentas.
+    in property <[Account]> accounts;
+    in-out property <bool> choosing-account;
+    // Entra con una cuenta que ya tiene la sesión iniciada. Devuelve "" o el error.
+    callback enter-account(string) -> string;
 
     property <Group> current: groups[selected];
     property <string> join-error;
-    property <string> auth-error;
+    in-out property <string> auth-error;
 
     init => { Palette.color-scheme = ColorScheme.dark; }
 
@@ -122,10 +129,27 @@ export component AppWindow inherits Window {
         }
     }
 
-    if !logged-in: AuthView {
+    if !logged-in && choosing-account: AccountsView {
+        accounts: root.accounts;
         error: auth-error;
-        login(nick, pass) => {
-            auth-error = root.login(nick, pass);
+        enter(nick) => {
+            auth-error = root.enter-account(nick);
+            logged-in = auth-error == "";
+        }
+        login(email, pass) => {
+            auth-error = root.login(email, pass);
+            logged-in = auth-error == "";
+        }
+        other-account => {
+            auth-error = "";
+            choosing-account = false;
+        }
+    }
+
+    if !logged-in && !choosing-account: AuthView {
+        error: auth-error;
+        login(email, pass) => {
+            auth-error = root.login(email, pass);
             logged-in = auth-error == "";
         }
         register(name, nick, email, pass) => {

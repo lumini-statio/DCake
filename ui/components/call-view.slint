@@ -1,10 +1,10 @@
-import { Participant } from "types.slint";
+import { User } from "types.slint";
 import { Icons } from "icons.slint";
 import { Avatar, IconButton } from "widgets.slint";
 
 // Videollamada: grilla de participantes y botones flotantes
 export component CallView inherits Rectangle {
-    in property <[Participant]> participants;
+    in property <[User]> participants;
     in-out property <bool> cam-on;
     in-out property <bool> mic-on;
     callback hang-up;

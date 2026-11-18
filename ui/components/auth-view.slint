@@ -5,7 +5,7 @@ export component AuthView inherits Rectangle {
     in property <string> error;
     in-out property <bool> registering;
     property <string> name-text;
-    property <string> email-text;
+    property <string> nick-text;
     callback login(string, string);
     callback register(string, string, string, string);
 
@@ -14,9 +14,9 @@ export component AuthView inherits Rectangle {
 
     function submit() {
         if registering {
-            root.register(root.name-text, nick-input.text, root.email-text, pass-input.text);
+            root.register(root.name-text, root.nick-text, email-input.text, pass-input.text);
         } else {
-            root.login(nick-input.text, pass-input.text);
+            root.login(email-input.text, pass-input.text);
         }
     }
 
@@ -42,14 +42,14 @@ export component AuthView inherits Rectangle {
                 placeholder-text: "Nombre (opcional)";
                 text <=> root.name-text;
             }
-            nick-input := LineEdit {
+            if registering: LineEdit {
                 placeholder-text: "Nickname";
+                text <=> root.nick-text;
+            }
+            email-input := LineEdit {
+                placeholder-text: "Email";
                 init => { self.focus(); }
                 accepted => { pass-input.focus(); }
-            }
-            if registering: LineEdit {
-                placeholder-text: "Email (opcional)";
-                text <=> root.email-text;
             }
             pass-input := LineEdit {
                 placeholder-text: "Contraseña";

@@ -1,0 +1,107 @@
+import { LineEdit } from "std-widgets.slint";
+import { Account } from "types.slint";
+
+// Cuentas guardadas en data.json: la que tiene token en el keyring entra directo, las demás piden email y contraseña.
+export component AccountsView inherits Rectangle {
+    in property <[Account]> accounts;
+    in property <string> error;
+    // Cuenta sin sesión elegida, que está pidiendo email y contraseña.
+    property <int> picked: -1;
+    property <string> email-text;
+    property <string> pass-text;
+    callback enter(string);
+    callback login(string, string);
+    callback other-account();
+
+    background: #1e1f22;
+    TouchArea { } // bloquea los clicks a la app de abajo
+
+    function submit() {
+        root.login(root.email-text, root.pass-text);
+    }
+
+    Rectangle {
+        width: 360px;
+        height: card.preferred-height;
+        border-radius: 12px;
+        background: #313338;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000080;
+
+        card := VerticalLayout {
+            padding: 20px;
+            spacing: 8px;
+            Text {
+                text: "Elegí una cuenta";
+                color: white;
+                font-size: 18px;
+                font-weight: 700;
+            }
+            for account[i] in root.accounts: Rectangle {
+                height: 40px;
+                border-radius: 6px;
+                background: row-ta.has-hover || root.picked == i ? #404249 : transparent;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    Text {
+                        text: account.nickname;
+                        color: white;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: account.signed ? "Sesión iniciada" : "Pide contraseña";
+                        color: account.signed ? #3ba55d : #80848e;
+                        font-size: 12px;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+                row-ta := TouchArea {
+                    clicked => {
+                        if account.signed {
+                            root.enter(account.nickname);
+                        } else {
+                            root.email-text = "";
+                            root.pass-text = "";
+                            root.picked = i;
+                        }
+                    }
+                }
+            }
+            // `if` en vez de `visible`: un elemento invisible sigue ocupando lugar en el layout
+            if root.picked >= 0: LineEdit {
+                placeholder-text: "Email de " + root.accounts[root.picked].nickname;
+                text <=> root.email-text;
+                init => { self.focus(); }
+            }
+            if root.picked >= 0: LineEdit {
+                placeholder-text: "Contraseña";
+                input-type: password;
+                text <=> root.pass-text;
+                accepted => { root.submit(); }
+            }
+            if root.picked >= 0: Rectangle {
+                height: 36px;
+                border-radius: 6px;
+                background: ok-ta.has-hover ? #4752c4 : #5865f2;
+                animate background { duration: 150ms; }
+                Text { text: "Ingresar"; color: white; font-weight: 600; }
+                ok-ta := TouchArea { clicked => { root.submit(); } }
+            }
+            if error != "": Text {
+                text: error;
+                color: #ed4245;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "Usar otra cuenta";
+                color: other-ta.has-hover ? #c9cdfb : #949cf7;
+                font-size: 13px;
+                horizontal-alignment: center;
+                other-ta := TouchArea { clicked => { root.other-account(); } }
+            }
+        }
+    }
+}

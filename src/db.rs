@@ -1,6 +1,6 @@
 use std::{env, time::Duration};
 
-use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbBackend, DbErr, Statement};
+use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbErr};
 use secrecy::{ExposeSecret, SecretString};
 
 pub async fn connect() -> Result<DatabaseConnection, String> {
@@ -14,18 +14,12 @@ pub async fn connect() -> Result<DatabaseConnection, String> {
     Database::connect(opt).await.map_err(|e| e.to_string())
 }
 
-/// Busca en la tabla "groups" el grupo cuyo id es `code`; devuelve su nombre.
-pub async fn find_group_name(db: &DatabaseConnection, code: &str) -> Result<Option<String>, DbErr> {
-    // id::text compara sin depender del tipo de la columna (int, uuid o texto).
-    let statement = Statement::from_sql_and_values(DbBackend::Postgres, "SELECT name FROM groups WHERE id::text = $1", [code.into()]);
-    db.query_one_raw(statement).await?.map(|row| row.try_get("", "name")).transpose()
-}
-
-// Prueba real contra la base del .env: cargo test -- --ignored
-#[test]
-#[ignore]
-fn connect_works() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let db = rt.block_on(connect()).unwrap();
-    rt.block_on(db.execute_unprepared("SELECT 1")).unwrap();
+/// Abre (o crea) la base SQLite de mensajes, p. ej. "sqlite://messages.db?mode=rwc".
+pub async fn connect_sqlite(url: &str) -> Result<DatabaseConnection, DbErr> {
+    let db = Database::connect(url).await?;
+    db.execute_unprepared(
+        "CREATE TABLE IF NOT EXISTS messages (id BLOB PRIMARY KEY, group_id BLOB NOT NULL, user_id BLOB NOT NULL, text TEXT NOT NULL)",
+    )
+    .await?;
+    Ok(db)
 }

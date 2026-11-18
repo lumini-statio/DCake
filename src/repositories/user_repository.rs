@@ -19,7 +19,6 @@ pub(super) fn user_from_row(row: &QueryResult) -> Result<User, DbErr> {
         is_admin: row.try_get("", "is_admin")?,
         last_call: row.try_get("", "last_call")?,
         created_at: row.try_get("", "created_at")?,
-        password_hash: None,
     })
 }
 
@@ -27,13 +26,12 @@ impl PostgreSQLRepository<User> for PgUserRepository {
     type Pk = Uuid;
 
     /// Una sola sentencia; si el nickname (UNIQUE) ya existe, actualiza esa fila y conserva su id.
-    /// No toca created_at; si password_hash es None conserva la contraseña guardada.
+    /// No toca created_at.
     async fn save(&self, u: &User) -> Result<(), DbErr> {
         let stmt = Statement::from_sql_and_values(
             DbBackend::Postgres,
-            r#"INSERT INTO users (id, name, nickname, description, email, is_admin, last_call, password) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-               ON CONFLICT (nickname) DO UPDATE SET name = $2, description = $4, email = $5, is_admin = $6, last_call = $7,
-               password = COALESCE($8, users.password)"#,
+            r#"INSERT INTO users (id, name, nickname, description, email, is_admin, last_call) VALUES ($1, $2, $3, $4, $5, $6, $7)
+               ON CONFLICT (nickname) DO UPDATE SET name = $2, description = $4, email = $5, is_admin = $6, last_call = $7"#,
             [
                 u.id.into(),
                 u.name.clone().into(),
@@ -42,7 +40,6 @@ impl PostgreSQLRepository<User> for PgUserRepository {
                 u.email.clone().into(),
                 u.is_admin.into(),
                 u.last_call.into(),
-                u.password_hash.clone().into(),
             ],
         );
         self.0.execute_raw(stmt).await.map(|_| ())

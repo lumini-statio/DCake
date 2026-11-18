@@ -12,8 +12,6 @@ pub struct User {
     pub last_call: Option<DateTime>,
     /// Lo pone la base (now()); save lo ignora.
     pub created_at: DateTimeWithTimeZone,
-    /// Solo el hash, y solo de escritura: las lecturas lo dejan en None y save con None conserva el guardado.
-    pub password_hash: Option<String>,
 }
 
 /// Tabla "groups".

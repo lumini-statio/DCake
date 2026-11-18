@@ -1,7 +1,6 @@
 
 pub mod group_service;
 pub mod message_service;
-pub mod user_service;
 pub mod userxgroup_service;
 
 use sea_orm::DbErr;

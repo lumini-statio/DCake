@@ -24,6 +24,8 @@ export component AppWindow inherits Window {
     in-out property <bool> cam-on: true;
     in-out property <bool> mic-on: true;
     callback send(int, string);
+    // Carga los mensajes del chat si no están en memoria.
+    callback open-chat(int);
     // Devuelve "" si se unió, o el mensaje de error.
     callback join-group(string) -> string;
     // Devuelven "" si entró, o el mensaje de error.
@@ -47,6 +49,7 @@ export component AppWindow inherits Window {
         if join-error == "" {
             join-popup.close();
             selected = groups.length - 1;
+            root.open-chat(selected);
             chat.reset();
         }
     }
@@ -72,6 +75,7 @@ export component AppWindow inherits Window {
                 }
                 group-clicked(i) => {
                     selected = i;
+                    root.open-chat(i);
                     in-call = false;
                     chat.reset();
                 }

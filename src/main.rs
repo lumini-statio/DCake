@@ -1,23 +1,30 @@
 mod auth;
+mod cache;
 mod db;
 mod domain;
 mod join;
 mod model;
+mod outbox;
 mod repositories;
 mod services;
 mod storage;
 #[cfg(test)]
 mod tests;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use slint::{Model, ModelRc, SharedString, VecModel};
 
-use domain::services::{Service, userxgroup_service::UserXGroupService};
+use domain::services::{Service, message_service::MessageService, userxgroup_service::UserXGroupService};
+use sea_orm::prelude::Uuid;
 use model::{msg, new_group, participant};
-use repositories::{group_repository::PgGroupRepository, user_repository::PgUserRepository};
-use services::{group_service::GroupServiceImpl, userxgroup_service::UserXGroupServiceImpl};
+use repositories::{group_repository::PgGroupRepository, message_repository::SqliteMessageRepository, user_repository::PgUserRepository};
+use services::{group_service::GroupServiceImpl, message_service::MessageServiceImpl, userxgroup_service::UserXGroupServiceImpl};
 
 slint::include_modules!();
 
@@ -111,18 +118,72 @@ fn main() -> Result<(), slint::PlatformError> {
     let groups = Rc::new(VecModel::from(model::demo_groups()));
     ui.set_groups(ModelRc::from(groups.clone()));
 
-    let g = groups.clone();
+    let messages = rt.block_on(db::connect_sqlite("sqlite://messages.db?mode=rwc")).inspect_err(|e| eprintln!("Sin base de mensajes: {e}")).ok();
+    let message_service = messages.map(|db| Arc::new(MessageServiceImpl(SqliteMessageRepository(db))));
+    // Mensajes enviados (y, cuando existan, recibidos) que esperan el próximo guardado.
+    let pending = outbox::Pending::default();
+
+    let (g, u, p) = (groups.clone(), user_id.clone(), pending.clone());
     ui.on_send(move |group, text| {
         let text = text.trim();
         if text.is_empty() {
             return;
         }
         if let Some(group) = g.row_data(group as usize) {
-            let messages = group.messages.as_any().downcast_ref::<VecModel<Message>>().unwrap();
-            messages.push(msg("Yo", text));
+            messages_of(&group).push(msg("Yo", text));
+            // Los grupos de ejemplo no tienen id: sus mensajes no se guardan.
+            if let (Ok(group_id), Some(user_id)) = (Uuid::parse_str(&group.id), u.get()) {
+                p.lock().unwrap().push(domain::models::Message { id: Uuid::new_v4(), group_id, user_id, text: text.into() });
+            }
         }
     });
 
+    // Cada 5 minutos, los pendientes se guardan en un hilo aparte; si el anterior sigue guardando, se espera al próximo tick.
+    let flushing: Rc<RefCell<Option<JoinHandle<()>>>> = Rc::default();
+    let save_timer = slint::Timer::default();
+    if let Some(service) = message_service.clone() {
+        let (h, p, f) = (rt.handle().clone(), pending.clone(), flushing.clone());
+        save_timer.start(slint::TimerMode::Repeated, Duration::from_secs(5 * 60), move || {
+            let mut f = f.borrow_mut();
+            if f.as_ref().is_some_and(|t| !t.is_finished()) || p.lock().unwrap().is_empty() {
+                return;
+            }
+            *f = Some(outbox::flush(h.clone(), service.clone(), p.clone()));
+        });
+    }
+
+    // Al entrar a un chat se cargan sus últimos 50 mensajes; quedan en memoria los de los últimos 3 chats abiertos.
+    let open_chats = RefCell::new(VecDeque::new());
+    let (g, r, u, p, ms) = (groups.clone(), rt.clone(), user_id.clone(), pending.clone(), message_service.clone());
+    ui.on_open_chat(move |i| {
+        let Some(group) = g.row_data(i as usize) else { return };
+        // Los grupos de ejemplo no tienen id: no hay mensajes en la base.
+        let Ok(id) = Uuid::parse_str(&group.id) else { return };
+        let mut open_chats = open_chats.borrow_mut();
+        if !open_chats.contains(&id) {
+            let Some(service) = ms.as_ref() else { return };
+            // shortcut: bloquea la UI mientras consulta, igual que join_group.
+            let loaded = match r.block_on(service.get_messages(id, 50, 0)) {
+                Ok(m) => m,
+                Err(e) => return eprintln!("No se pudieron cargar los mensajes: {e}"),
+            };
+            let me = u.get();
+            // shortcut: los mensajes ajenos muestran el inicio del uuid del autor; buscar el nickname cuando haya usuarios en la UI.
+            let from = |m: &domain::models::Message| if Some(m.user_id) == me { "Yo".into() } else { m.user_id.to_string()[..8].to_owned() };
+            // Se suman los que todavía no se guardaron, sin repetir los que ya llegaron a la base.
+            let mut all: Vec<_> = loaded.into_iter().rev().collect();
+            let unsaved: Vec<_> = p.lock().unwrap().iter().filter(|m| m.group_id == id && !all.iter().any(|x| x.id == m.id)).cloned().collect();
+            all.extend(unsaved);
+            let all = &all[all.len().saturating_sub(50)..];
+            messages_of(&group).set_vec(all.iter().map(|m| msg(&from(m), &m.text)).collect::<Vec<_>>());
+        }
+        if let Some(old) = cache::touch(&mut open_chats, id, 3) {
+            let old = SharedString::from(old.to_string());
+            g.iter().filter(|x| x.id == old).for_each(|x| messages_of(&x).set_vec(vec![]));
+        }
+    });
+
+    let handle = rt.handle().clone();
     let group_service = (*db).clone().map(|db| GroupServiceImpl(PgGroupRepository(db)));
     let userxgroup_service = (*db).clone().map(|db| UserXGroupServiceImpl(PgUserRepository(db)));
     ui.on_join_group(move |code| {
@@ -153,7 +214,25 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    ui.run()
+    let result = ui.run();
+
+    // Al cerrar: se espera el guardado en curso y se guarda el resto en lotes de 100, también en un hilo aparte.
+    drop(save_timer);
+    if let Some(t) = flushing.take() {
+        let _ = t.join();
+    }
+    if let Some(service) = message_service {
+        let _ = outbox::flush(handle, service, pending.clone()).join();
+    }
+    let lost = pending.lock().unwrap().len();
+    if lost > 0 {
+        eprintln!("Se perdieron {lost} mensajes que no se pudieron guardar.");
+    }
+    result
+}
+
+fn messages_of(group: &Group) -> &VecModel<Message> {
+    group.messages.as_any().downcast_ref::<VecModel<Message>>().unwrap()
 }
 
 /// Sesión vencida: borra el token del keyring y manda al login. Devuelve el mensaje a mostrar.

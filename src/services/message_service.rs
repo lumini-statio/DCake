@@ -19,6 +19,10 @@ impl<R: MessageRepository> Service<Message> for MessageServiceImpl<R> {
 }
 
 impl<R: MessageRepository> MessageService for MessageServiceImpl<R> {
+    async fn save_all(&self, msgs: &[Message]) -> Result<(), DbErr> {
+        self.0.save_all(msgs).await
+    }
+
     async fn get_messages(&self, group_id: Uuid, limit: u64, offset: u64) -> Result<Vec<Message>, DbErr> {
         self.0.get_messages(group_id, limit, offset).await
     }

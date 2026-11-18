@@ -12,7 +12,7 @@ pub struct Session {
 async fn send(path: &str, body: Value) -> Result<(reqwest::StatusCode, Value), String> {
     dotenvy::dotenv().ok();
     let url = std::env::var("SUPABASE_URL").map_err(|_| "SUPABASE_URL no definida.")?;
-    let key = std::env::var("SUPABASE_ANON_KEY").map_err(|_| "SUPABASE_ANON_KEY no definida.")?;
+    let key = std::env::var("SUPABASE_PUBLISHABLE_KEY").map_err(|_| "SUPABASE_PUBLISHABLE_KEY no definida.")?;
     let res = reqwest::Client::new()
         .post(format!("{}/auth/v1/{path}", url.trim_end_matches('/')))
         .header("apikey", key)

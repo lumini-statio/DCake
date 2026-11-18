@@ -30,6 +30,21 @@ impl SQLiteRepository<Message> for SqliteMessageRepository {
 }
 
 impl MessageRepository for SqliteMessageRepository {
+    // Un solo INSERT por lote: 4 parámetros por mensaje, lejos del límite de SQLite con lotes de 100.
+    async fn save_all(&self, msgs: &[Message]) -> Result<(), DbErr> {
+        if msgs.is_empty() {
+            return Ok(());
+        }
+        let rows = vec!["(?, ?, ?, ?)"; msgs.len()].join(", ");
+        let values = msgs.iter().flat_map(|m| [m.id.into(), m.group_id.into(), m.user_id.into(), m.text.clone().into()]);
+        let stmt = Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            format!("INSERT INTO messages (id, group_id, user_id, text) VALUES {rows} ON CONFLICT (id) DO UPDATE SET text = excluded.text"),
+            values,
+        );
+        self.0.execute_raw(stmt).await.map(|_| ())
+    }
+
     async fn get_messages(&self, group_id: Uuid, limit: u64, offset: u64) -> Result<Vec<Message>, DbErr> {
         let stmt = Statement::from_sql_and_values(
             DbBackend::Sqlite,

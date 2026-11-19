@@ -1,3 +1,4 @@
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, jwk::JwkSet};
 use sea_orm::prelude::Uuid;
 use serde_json::{Value, json};
 
@@ -8,11 +9,14 @@ pub struct Session {
     pub refresh_token: String,
 }
 
-/// POST a `{SUPABASE_URL}/auth/v1/{path}`; Err solo si no se pudo hablar con Supabase.
-async fn send(path: &str, body: Value) -> Result<(reqwest::StatusCode, Value), String> {
+fn env(name: &str) -> Result<String, String> {
     dotenvy::dotenv().ok();
-    let url = std::env::var("SUPABASE_URL").map_err(|_| "SUPABASE_URL no definida.")?;
-    let key = std::env::var("SUPABASE_PUBLISHABLE_KEY").map_err(|_| "SUPABASE_PUBLISHABLE_KEY no definida.")?;
+    std::env::var(name).map_err(|_| format!("{name} no definida."))
+}
+
+async fn send(path: &str, body: Value) -> Result<(reqwest::StatusCode, Value), String> {
+    let url = env("SUPABASE_URL")?;
+    let key = env("SUPABASE_PUBLISHABLE_KEY")?;
     let res = reqwest::Client::new()
         .post(format!("{}/auth/v1/{path}", url.trim_end_matches('/')))
         .header("apikey", key)
@@ -24,18 +28,15 @@ async fn send(path: &str, body: Value) -> Result<(reqwest::StatusCode, Value), S
     Ok((status, res.json().await.unwrap_or_default()))
 }
 
-/// Como `send`, pero una respuesta de error de Supabase también es Err, con su mensaje.
 async fn post(path: &str, body: Value) -> Result<Value, String> {
     let (status, v) = send(path, body).await?;
     if status.is_success() {
         return Ok(v);
     }
-    // Según la versión de GoTrue el mensaje viene en "msg", "error_description" o "message".
     let msg = ["msg", "error_description", "message"].iter().find_map(|k| v[*k].as_str());
     Err(msg.map_or_else(|| format!("Error de Supabase ({status})."), str::to_owned))
 }
 
-/// Arma la sesión desde la respuesta de /token o /signup.
 pub fn parse_session(v: &Value) -> Result<Session, String> {
     let user = &v["user"];
     let user_id = user["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()).ok_or("Respuesta de Supabase sin usuario.")?;
@@ -45,18 +46,45 @@ pub fn parse_session(v: &Value) -> Result<Session, String> {
     Ok(Session { user_id, nickname, refresh_token })
 }
 
-pub async fn login(email: &str, password: &str) -> Result<Session, String> {
-    parse_session(&post("token?grant_type=password", json!({ "email": email, "password": password })).await?)
+pub fn verify_token(token: &str, jwks: &JwkSet, issuer: &str) -> Result<Uuid, String> {
+    let invalid = |e: jsonwebtoken::errors::Error| format!("Access token inválido: {e}");
+    let header = jsonwebtoken::decode_header(token).map_err(invalid)?;
+    // Solo algoritmos asimétricos: un HS256 no se puede verificar con el JWKS.
+    if !matches!(header.alg, Algorithm::ES256 | Algorithm::RS256) {
+        return Err(format!("Algoritmo de token no soportado: {:?}.", header.alg));
+    }
+    let jwk = header.kid.as_deref().and_then(|k| jwks.find(k)).ok_or("Token firmado con una clave desconocida.")?;
+    let key = DecodingKey::from_jwk(jwk).map_err(invalid)?;
+    let mut validation = Validation::new(header.alg);
+    validation.set_audience(&["authenticated"]);
+    validation.set_issuer(&[issuer]);
+    let claims = jsonwebtoken::decode::<Value>(token, &key, &validation).map_err(invalid)?.claims;
+    claims["sub"].as_str().and_then(|s| Uuid::parse_str(s).ok()).ok_or_else(|| "Access token sin usuario.".into())
 }
 
-/// None si Supabase pide confirmar el email antes de dar sesión.
+async fn verified(v: Value) -> Result<Session, String> {
+    let s = parse_session(&v)?;
+    let token = v["access_token"].as_str().ok_or("Respuesta de Supabase sin access token.")?;
+    let url = env("SUPABASE_JWKS_URL")?;
+    let jwks: JwkSet = async { reqwest::get(url).await?.error_for_status()?.json().await }
+        .await
+        .map_err(|e: reqwest::Error| format!("No se pudo obtener el JWKS de Supabase: {e}"))?;
+    let issuer = format!("{}/auth/v1", env("SUPABASE_URL")?.trim_end_matches('/'));
+    if verify_token(token, &jwks, &issuer)? != s.user_id {
+        return Err("El access token no corresponde al usuario.".into());
+    }
+    Ok(s)
+}
+
+pub async fn login(email: &str, password: &str) -> Result<Session, String> {
+    verified(post("token?grant_type=password", json!({ "email": email, "password": password })).await?).await
+}
+
 pub async fn register(nickname: &str, name: Option<&str>, email: &str, password: &str) -> Result<Option<Session>, String> {
     let v = post("signup", json!({ "email": email, "password": password, "data": { "nickname": nickname, "name": name } })).await?;
-    if v["refresh_token"].is_null() { Ok(None) } else { parse_session(&v).map(Some) }
+    if v["refresh_token"].is_null() { Ok(None) } else { verified(v).await.map(Some) }
 }
 
-/// Ok(None) si la sesión venció: Supabase rechaza el token (vencido, revocado o ya usado).
-/// Supabase rota el refresh token: hay que guardar el de la sesión devuelta.
 pub async fn refresh(refresh_token: &str) -> Result<Option<Session>, String> {
     let (status, v) = send("token?grant_type=refresh_token", json!({ "refresh_token": refresh_token })).await?;
     // 400/403 es token inválido; otros errores (401 apikey mala, 429, 5xx) no significan que la sesión venció.
@@ -66,24 +94,22 @@ pub async fn refresh(refresh_token: &str) -> Result<Option<Session>, String> {
     if !status.is_success() {
         return Err(format!("Error de Supabase ({status})."));
     }
-    parse_session(&v).map(Some)
+    verified(v).await.map(Some)
 }
 
-/// Una entrada por cuenta, indexada por nickname (único).
+// Una entrada por cuenta, indexada por nickname (único).
 fn entry(nickname: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new("jaw-yo", nickname).map_err(|e| format!("Keyring: {e}"))
+    keyring::Entry::new("jaw-jo", nickname).map_err(|e| format!("Keyring: {e}"))
 }
 
 pub fn save_token(nickname: &str, token: &str) -> Result<(), String> {
     entry(nickname)?.set_password(token).map_err(|e| format!("Keyring: {e}"))
 }
 
-/// None si no hay token guardado o el keyring no está disponible.
 pub fn load_token(nickname: &str) -> Option<String> {
     entry(nickname).ok()?.get_password().ok()
 }
 
 pub fn delete_token(nickname: &str) {
-    // Si no había token no hay nada que borrar: el error se ignora.
     let _ = entry(nickname).map(|e| e.delete_credential());
 }

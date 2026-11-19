@@ -65,66 +65,81 @@ fn main() -> Result<(), slint::PlatformError> {
     // Panel de cuentas: si data.json tiene cuentas, se elige una antes del login.
     let accounts = storage::load_accounts(DATA.as_ref()).inspect_err(|e| eprintln!("{e}")).unwrap_or_default();
     ui.set_choosing_account(!accounts.is_empty());
-    // Inicio automático: si una cuenta tiene token en el keyring y Supabase lo acepta, se entra sin mostrar ningún panel.
-    // shortcut: bloquea el arranque mientras refresca el token, igual que login.
-    if let Some((nick, token)) = accounts.iter().find_map(|n| Some((n, auth::load_token(n)?))) {
-        match rt.block_on(auth::refresh(&token)) {
+    // Inicio automático: si una cuenta tiene token en el keyring y Supabase lo acepta, se entra sin elegir cuenta.
+    if let Some((nick, token)) = accounts.iter().find_map(|n| Some((n.clone(), auth::load_token(n)?))) {
+        let si = sign_in.clone();
+        run_busy(&ui, &rt, async move { auth::refresh(&token).await }, move |ui, r| match r {
             Ok(Some(s)) => {
-                let e = sign_in(s);
+                let e = si(s);
                 if !e.is_empty() {
                     eprintln!("{e}");
                 }
                 ui.set_logged_in(true);
             }
-            Ok(None) => {
-                let e = session_expired(&ui, nick);
-                ui.set_auth_error(e);
-            }
+            Ok(None) => ui.set_auth_error(session_expired(ui, &nick)),
             // Sin conexión no se sabe si venció: queda en el panel de cuentas para reintentar.
             Err(e) => eprintln!("No se pudo restaurar la sesión: {e}"),
-        }
+        });
     }
     ui.set_accounts(ModelRc::new(VecModel::from(
         accounts.iter().map(|n| Account { nickname: n.as_str().into(), signed: auth::load_token(n).is_some() }).collect::<Vec<_>>(),
     )));
 
+    // Muestra el resultado de un intento de entrada: "" entra, otro texto es el error.
+    fn auth_result(ui: &AppWindow, e: SharedString) {
+        ui.set_logged_in(e.is_empty());
+        ui.set_auth_error(e);
+    }
+
     let (r, si, w) = (rt.clone(), sign_in.clone(), ui.as_weak());
     ui.on_enter_account(move |nick| {
-        let Some(token) = auth::load_token(&nick) else { return "Esa cuenta no tiene la sesión iniciada.".into() };
-        match r.block_on(auth::refresh(&token)) {
-            Ok(Some(s)) => si(s),
-            Ok(None) => session_expired(&w.unwrap(), &nick),
-            Err(e) => e.into(),
-        }
+        let ui = w.unwrap();
+        let Some(token) = auth::load_token(&nick) else { return auth_result(&ui, "Esa cuenta no tiene la sesión iniciada.".into()) };
+        let si = si.clone();
+        run_busy(&ui, &r, async move { auth::refresh(&token).await }, move |ui, res| {
+            let e = match res {
+                Ok(Some(s)) => si(s),
+                Ok(None) => session_expired(ui, &nick),
+                Err(e) => e.into(),
+            };
+            auth_result(ui, e);
+        });
     });
 
-    let (r, si) = (rt.clone(), sign_in.clone());
+    let (r, si, w) = (rt.clone(), sign_in.clone(), ui.as_weak());
     ui.on_login(move |email: SharedString, pass| {
-        let (email, pass) = (email.trim(), pass.as_str());
+        let ui = w.unwrap();
+        let (email, pass) = (email.trim().to_owned(), pass.to_string());
         if email.is_empty() || pass.is_empty() {
-            return "Ingresá email y contraseña.".into();
+            return auth_result(&ui, "Ingresá email y contraseña.".into());
         }
-        // shortcut: bloquea la UI mientras consulta, igual que join_group.
-        r.block_on(auth::login(email, pass)).map_or_else(SharedString::from, |s| si(s))
+        let si = si.clone();
+        run_busy(&ui, &r, async move { auth::login(&email, &pass).await }, move |ui, res| auth_result(ui, res.map_or_else(SharedString::from, |s| si(s))));
     });
 
-    let (r, si) = (rt.clone(), sign_in.clone());
+    let (r, si, w) = (rt.clone(), sign_in.clone(), ui.as_weak());
     ui.on_register(move |name, nick, email, pass| {
-        let (name, nick, email) = (name.trim(), nick.trim(), email.trim());
+        let ui = w.unwrap();
+        let (name, nick, email, pass) = (name.trim().to_owned(), nick.trim().to_owned(), email.trim().to_owned(), pass.to_string());
         if nick.is_empty() || email.is_empty() || pass.is_empty() {
-            return "Nickname, email y contraseña son obligatorios.".into();
+            return auth_result(&ui, "Nickname, email y contraseña son obligatorios.".into());
         }
         if nick.chars().count() > 32 {
-            return "El nickname admite hasta 32 caracteres.".into();
+            return auth_result(&ui, "El nickname admite hasta 32 caracteres.".into());
         }
         if !email.contains('@') {
-            return "Email inválido.".into();
+            return auth_result(&ui, "Email inválido.".into());
         }
-        match r.block_on(auth::register(nick, Some(name).filter(|n| !n.is_empty()), email, &pass)) {
-            Ok(Some(s)) => si(s),
-            Ok(None) => "Te mandamos un email para confirmar la cuenta; después iniciá sesión.".into(),
-            Err(e) => e.into(),
-        }
+        let si = si.clone();
+        let fut = async move { auth::register(&nick, Some(name.as_str()).filter(|n| !n.is_empty()), &email, &pass).await };
+        run_busy(&ui, &r, fut, move |ui, res| {
+            let e = match res {
+                Ok(Some(s)) => si(s),
+                Ok(None) => "Te mandamos un email para confirmar la cuenta; después iniciá sesión.".into(),
+                Err(e) => e.into(),
+            };
+            auth_result(ui, e);
+        });
     });
 
     let messages = rt.block_on(db::connect_sqlite("sqlite://messages.db?mode=rwc")).inspect_err(|e| eprintln!("Sin base de mensajes: {e}")).ok();
@@ -162,17 +177,29 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     // Al entrar a un chat se cargan sus últimos 50 mensajes; quedan en memoria los de los últimos 3 chats abiertos.
-    let open_chats = RefCell::new(VecDeque::new());
-    let (g, r, u, p, ms) = (groups.clone(), rt.clone(), user_id.clone(), pending.clone(), message_service.clone());
+    let open_chats = Rc::new(RefCell::new(VecDeque::new()));
+    // Marca `id` como el chat más reciente y vacía el que sale de la memoria.
+    let touch = {
+        let (g, oc) = (groups.clone(), open_chats.clone());
+        move |id: Uuid| {
+            if let Some(old) = cache::touch(&mut oc.borrow_mut(), id, 3) {
+                let old = SharedString::from(old.to_string());
+                g.iter().filter(|x| x.id == old).for_each(|x| messages_of(&x).set_vec(vec![]));
+            }
+        }
+    };
+    let (g, r, u, p, ms, w) = (groups.clone(), rt.clone(), user_id.clone(), pending.clone(), message_service.clone(), ui.as_weak());
     ui.on_open_chat(move |i| {
         let Some(group) = g.row_data(i as usize) else { return };
         // Los grupos de ejemplo no tienen id: no hay mensajes en la base.
         let Ok(id) = Uuid::parse_str(&group.id) else { return };
-        let mut open_chats = open_chats.borrow_mut();
-        if !open_chats.contains(&id) {
-            let Some(service) = ms.as_ref() else { return };
-            // shortcut: bloquea la UI mientras consulta, igual que join_group.
-            let loaded = match r.block_on(service.get_messages(id, 50, 0)) {
+        if open_chats.borrow().contains(&id) {
+            return touch(id);
+        }
+        let Some(service) = ms.clone() else { return };
+        let (u, p, touch) = (u.clone(), p.clone(), touch.clone());
+        run_busy(&w.unwrap(), &r, async move { service.get_messages(id, 50, 0).await }, move |_, res| {
+            let loaded = match res {
                 Ok(m) => m,
                 Err(e) => return eprintln!("No se pudieron cargar los mensajes: {e}"),
             };
@@ -185,41 +212,43 @@ fn main() -> Result<(), slint::PlatformError> {
             all.extend(unsaved);
             let all = &all[all.len().saturating_sub(50)..];
             messages_of(&group).set_vec(all.iter().map(|m| msg(&from(m), &m.text)).collect::<Vec<_>>());
-        }
-        if let Some(old) = cache::touch(&mut open_chats, id, 3) {
-            let old = SharedString::from(old.to_string());
-            g.iter().filter(|x| x.id == old).for_each(|x| messages_of(&x).set_vec(vec![]));
-        }
+            touch(id);
+        });
     });
 
     let handle = rt.handle().clone();
-    let group_service = (*db).clone().map(|db| GroupServiceImpl(PgGroupRepository(db)));
-    let userxgroup_service = (*db).clone().map(|db| UserXGroupServiceImpl(PgUserRepository(db)));
+    let group_service = (*db).clone().map(|db| Arc::new(GroupServiceImpl(PgGroupRepository(db))));
+    let userxgroup_service = (*db).clone().map(|db| Arc::new(UserXGroupServiceImpl(PgUserRepository(db))));
+    let w = ui.as_weak();
     ui.on_join_group(move |code| {
+        let ui = w.unwrap();
         let ids: Vec<SharedString> = groups.iter().map(|g| g.id).collect();
-        match join::validate_code(&code, &ids) {
-            Ok(id) => {
-                let (Some(group_service), Some(userxgroup_service)) = (group_service.as_ref(), userxgroup_service.as_ref()) else {
-                    return "Sin conexión a la base de datos.".into();
-                };
-                let Some(user) = user_id.get() else { return "Iniciá sesión para unirte a un grupo.".into() };
-                // shortcut: la consulta bloquea la UI (hasta 5 s si la base no responde); pasar a slint::spawn_local si molesta.
-                let name = match rt.block_on(group_service.find_by_pk(&id)) {
-                    Ok(Some(group)) => group.name,
-                    Ok(None) => return "El grupo no existe.".into(),
-                    Err(e) => return format!("Error de base de datos: {e}").into(),
-                };
-                if let Err(e) = rt.block_on(userxgroup_service.add_relation(user, id)) {
-                    return format!("Error de base de datos: {e}").into();
-                }
-                if let Err(e) = storage::save_group(DATA.as_ref(), &nickname.borrow(), &name, &id.to_string()) {
-                    return e.into();
-                }
-                groups.insert(0, new_group(&id.to_string(), &name, None, COLORS[ids.len() % COLORS.len()], vec![], vec![participant("Yo", 0x5865f2, true)]));
-                SharedString::new()
-            }
-            Err(e) => e.into(),
-        }
+        let id = match join::validate_code(&code, &ids) {
+            Ok(id) => id,
+            Err(e) => return ui.set_join_error(e.into()),
+        };
+        let (Some(gs), Some(uxg)) = (group_service.clone(), userxgroup_service.clone()) else {
+            return ui.set_join_error("Sin conexión a la base de datos.".into());
+        };
+        let Some(user) = user_id.get() else { return ui.set_join_error("Iniciá sesión para unirte a un grupo.".into()) };
+        let fut = async move {
+            let name = match gs.find_by_pk(&id).await {
+                Ok(Some(group)) => group.name,
+                Ok(None) => return Err("El grupo no existe.".to_owned()),
+                Err(e) => return Err(format!("Error de base de datos: {e}")),
+            };
+            uxg.add_relation(user, id).await.map_err(|e| format!("Error de base de datos: {e}"))?;
+            Ok(name)
+        };
+        let (groups, nickname) = (groups.clone(), nickname.clone());
+        run_busy(&ui, &rt, fut, move |ui, res| {
+            let name = match res.and_then(|name| storage::save_group(DATA.as_ref(), &nickname.borrow(), &name, &id.to_string()).map(|_| name)) {
+                Ok(name) => name,
+                Err(e) => return ui.set_join_error(e.into()),
+            };
+            groups.insert(0, new_group(&id.to_string(), &name, None, COLORS[ids.len() % COLORS.len()], vec![], vec![participant("Yo", 0x5865f2, true)]));
+            ui.invoke_joined();
+        });
     });
 
     let result = ui.run();
@@ -243,6 +272,29 @@ const COLORS: [u32; 5] = [0x3ba55d, 0xed4245, 0x9b59b6, 0xfaa61a, 0x1abc9c];
 
 fn messages_of(group: &Group) -> &VecModel<Message> {
     group.messages.as_any().downcast_ref::<VecModel<Message>>().unwrap()
+}
+
+/// Corre `fut` en tokio sin bloquear la UI, mostrando la animación de carga (`busy`) hasta que termina;
+/// `done` recibe el resultado en el hilo de la UI. Si ya hay otra operación en curso, no hace nada.
+fn run_busy<T: Send + 'static>(ui: &AppWindow, rt: &tokio::runtime::Runtime, fut: impl Future<Output = T> + Send + 'static, done: impl FnOnce(&AppWindow, T) + 'static) {
+    if ui.get_busy() {
+        return;
+    }
+    ui.set_busy(true);
+    let (task, w) = (rt.spawn(fut), ui.as_weak());
+    let spawned = slint::spawn_local(async move {
+        let res = task.await;
+        let Some(ui) = w.upgrade() else { return };
+        ui.set_busy(false);
+        match res {
+            Ok(v) => done(&ui, v),
+            Err(e) => eprintln!("La operación falló: {e}"),
+        }
+    });
+    if let Err(e) = spawned {
+        eprintln!("No se pudo lanzar la operación: {e}");
+        ui.set_busy(false);
+    }
 }
 
 /// Sesión vencida: borra el token del keyring y manda al login. Devuelve el mensaje a mostrar.

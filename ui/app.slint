@@ -7,6 +7,7 @@ import { JoinCard } from "components/join-card.slint";
 import { AuthView } from "components/auth-view.slint";
 import { AccountsView } from "components/accounts-view.slint";
 import { Account } from "components/types.slint";
+import { Loading } from "components/loading.slint";
 
 // Re-exportados para que Rust genere los structs.
 export { Message, User, Group, Account } from "components/types.slint";
@@ -26,32 +27,41 @@ export component AppWindow inherits Window {
     callback send(int, string);
     // Carga los mensajes del chat si no están en memoria.
     callback open-chat(int);
-    // Devuelve "" si se unió, o el mensaje de error.
-    callback join-group(string) -> string;
-    // Devuelven "" si entró, o el mensaje de error.
-    callback login(string, string) -> string;
-    callback register(string, string, string, string) -> string;
+    // Rust responde poniendo join-error o llamando a joined().
+    callback join-group(string);
+    // Rust responde poniendo auth-error y logged-in.
+    callback login(string, string);
+    callback register(string, string, string, string);
+    // Hay una operación bloqueante en curso: se muestra la animación de carga.
+    in property <bool> busy;
     in-out property <bool> logged-in;
     // Cuentas de data.json; mientras choosing-account sea true se muestra el panel de cuentas.
     in property <[Account]> accounts;
     in-out property <bool> choosing-account;
-    // Entra con una cuenta que ya tiene la sesión iniciada. Devuelve "" o el error.
-    callback enter-account(string) -> string;
+    // Entra con una cuenta que ya tiene la sesión iniciada. Rust responde poniendo auth-error y logged-in.
+    callback enter-account(string);
 
     property <Group> current: groups[selected];
-    property <string> join-error;
+    in-out property <string> join-error;
     in-out property <string> auth-error;
 
     init => { Palette.color-scheme = ColorScheme.dark; }
 
-    function submit-join(code: string) {
-        join-error = root.join-group(code);
-        if join-error == "" {
-            join-popup.close();
-            selected = 0;
+    // open-chat se ignora mientras hay otra operación en curso: al terminar, se carga el chat actual.
+    // Si ya está en memoria, open-chat no consulta nada.
+    changed busy => {
+        if !busy && selected >= 0 {
             root.open-chat(selected);
-            chat.reset();
         }
+    }
+
+    // Rust la llama cuando join-group terminó bien.
+    public function joined() {
+        join-error = "";
+        join-popup.close();
+        selected = 0;
+        root.open-chat(selected);
+        chat.reset();
     }
 
     fs := FocusScope {
@@ -127,9 +137,12 @@ export component AppWindow inherits Window {
 
             JoinCard {
                 error: join-error;
-                submit(code) => { root.submit-join(code); }
+                submit(code) => { root.join-group(code); }
                 cancel => { join-popup.close(); }
             }
+
+            // El popup se dibuja sobre la ventana: necesita su propia animación de carga.
+            if root.busy: Loading { }
         }
     }
 
@@ -137,12 +150,10 @@ export component AppWindow inherits Window {
         accounts: root.accounts;
         error: auth-error;
         enter(nick) => {
-            auth-error = root.enter-account(nick);
-            logged-in = auth-error == "";
+            root.enter-account(nick);
         }
         login(email, pass) => {
-            auth-error = root.login(email, pass);
-            logged-in = auth-error == "";
+            root.login(email, pass);
         }
         other-account => {
             auth-error = "";
@@ -153,12 +164,12 @@ export component AppWindow inherits Window {
     if !logged-in && !choosing-account: AuthView {
         error: auth-error;
         login(email, pass) => {
-            auth-error = root.login(email, pass);
-            logged-in = auth-error == "";
+            root.login(email, pass);
         }
         register(name, nick, email, pass) => {
-            auth-error = root.register(name, nick, email, pass);
-            logged-in = auth-error == "";
+            root.register(name, nick, email, pass);
         }
     }
+
+    if busy: Loading { }
 }

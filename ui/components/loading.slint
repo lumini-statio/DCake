@@ -1,0 +1,19 @@
+// Animación de carga genérica: cubre a su padre, bloquea los clicks y muestra un spinner.
+// Usarla con `if busy: Loading { }` como último hijo, para que quede arriba de todo.
+export component Loading inherits Rectangle {
+    background: #000000a0;
+    TouchArea { } // bloquea los clicks mientras carga
+
+    Path {
+        width: 48px;
+        height: 48px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        // Arco de 3/4 de círculo
+        commands: "M12 2 A10 10 0 1 1 2 12";
+        stroke: #5865f2;
+        stroke-width: 4px;
+        fill: transparent;
+        transform-rotation: mod(animation-tick() / 1ms, 900) * 360deg / 900;
+    }
+}

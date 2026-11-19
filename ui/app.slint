@@ -48,7 +48,7 @@ export component AppWindow inherits Window {
         join-error = root.join-group(code);
         if join-error == "" {
             join-popup.close();
-            selected = groups.length - 1;
+            selected = 0;
             root.open-chat(selected);
             chat.reset();
         }

@@ -35,18 +35,30 @@ fn main() -> Result<(), slint::PlatformError> {
     // Sin base la app igual abre; el error se muestra al intentar unirse a un grupo.
     let db = rt.block_on(db::connect()).inspect_err(|e| eprintln!("Sin conexión a la base de datos: {e}")).ok();
     let (rt, db) = (Rc::new(rt), Rc::new(db));
-    // Usuario logueado (id de Supabase Auth): lo setea sign_in; lo usa join_group.
+    // Usuario logueado (id de Supabase Auth) y su nickname: los setea sign_in; los usa join_group.
     let user_id = Rc::new(Cell::new(None));
+    let nickname = Rc::new(RefCell::new(String::new()));
     const DATA: &str = "data.json";
+
+    // Chats como pila: el más nuevo arriba (índice 0). Se cargan de data.json al iniciar sesión.
+    let groups = Rc::new(VecModel::<Group>::default());
+    ui.set_groups(ModelRc::from(groups.clone()));
 
     // Deja `s` como la única sesión: guarda su token en el keyring y borra el de las demás cuentas.
     let sign_in = {
-        let u = user_id.clone();
+        let (u, n, g) = (user_id.clone(), nickname.clone(), groups.clone());
         Rc::new(move |s: auth::Session| -> SharedString {
             u.set(Some(s.user_id));
             let others = storage::load_accounts(DATA.as_ref()).unwrap_or_default();
             others.iter().filter(|n| **n != s.nickname).for_each(|n| auth::delete_token(n));
-            auth::save_token(&s.nickname, &s.refresh_token).and_then(|_| storage::add_account(DATA.as_ref(), &s.nickname)).err().unwrap_or_default().into()
+            let err = auth::save_token(&s.nickname, &s.refresh_token).and_then(|_| storage::add_account(DATA.as_ref(), &s.nickname)).err().unwrap_or_default();
+            let saved = storage::load_groups(DATA.as_ref(), &s.nickname).inspect_err(|e| eprintln!("{e}")).unwrap_or_default();
+            // El color sale de la posición desde el más viejo, igual que al unirse, para que no cambie entre aperturas.
+            let mut all: Vec<_> = saved.iter().enumerate().map(|(i, (name, id))| new_group(id, name, None, COLORS[i % COLORS.len()], vec![], vec![participant("Yo", 0x5865f2, true)])).collect();
+            all.reverse();
+            g.set_vec(all);
+            *n.borrow_mut() = s.nickname;
+            err.into()
         })
     };
 
@@ -114,9 +126,6 @@ fn main() -> Result<(), slint::PlatformError> {
             Err(e) => e.into(),
         }
     });
-
-    let groups = Rc::new(VecModel::from(model::demo_groups()));
-    ui.set_groups(ModelRc::from(groups.clone()));
 
     let messages = rt.block_on(db::connect_sqlite("sqlite://messages.db?mode=rwc")).inspect_err(|e| eprintln!("Sin base de mensajes: {e}")).ok();
     let message_service = messages.map(|db| Arc::new(MessageServiceImpl(SqliteMessageRepository(db))));
@@ -203,11 +212,10 @@ fn main() -> Result<(), slint::PlatformError> {
                 if let Err(e) = rt.block_on(userxgroup_service.add_relation(user, id)) {
                     return format!("Error de base de datos: {e}").into();
                 }
-                if let Err(e) = storage::save_group(DATA.as_ref(), &name, &id.to_string()) {
+                if let Err(e) = storage::save_group(DATA.as_ref(), &nickname.borrow(), &name, &id.to_string()) {
                     return e.into();
                 }
-                const COLORS: [u32; 5] = [0x3ba55d, 0xed4245, 0x9b59b6, 0xfaa61a, 0x1abc9c];
-                groups.push(new_group(&id.to_string(), &name, None, COLORS[ids.len() % COLORS.len()], vec![], vec![participant("Yo", 0x5865f2, true)]));
+                groups.insert(0, new_group(&id.to_string(), &name, None, COLORS[ids.len() % COLORS.len()], vec![], vec![participant("Yo", 0x5865f2, true)]));
                 SharedString::new()
             }
             Err(e) => e.into(),
@@ -230,6 +238,8 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     result
 }
+
+const COLORS: [u32; 5] = [0x3ba55d, 0xed4245, 0x9b59b6, 0xfaa61a, 0x1abc9c];
 
 fn messages_of(group: &Group) -> &VecModel<Message> {
     group.messages.as_any().downcast_ref::<VecModel<Message>>().unwrap()
